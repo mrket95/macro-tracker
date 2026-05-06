@@ -2,37 +2,21 @@
   "series": [
     {
       "id": "BUSLOANS",
-      "name": "Commercial and Industrial Loans, All Commercial Banks",
-      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BUSLOANS",
-      "manual_file": "manual_data/BUSLOANS.csv",
-      "description": "미국 상업은행 기업대출. 대출성장률 YoY 계산용."
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BUSLOANS"
     },
     {
       "id": "GDPC1",
-      "name": "Real Gross Domestic Product",
-      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDPC1",
-      "manual_file": "manual_data/GDPC1.csv",
-      "description": "미국 실질 GDP. GDP YoY 및 QoQ annualized 계산용."
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDPC1"
     },
     {
       "id": "NAPM",
-      "name": "ISM Manufacturing PMI",
-      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=NAPM",
-      "manual_file": "manual_data/NAPM.csv",
-      "description": "ISM 제조업 PMI. FRED에서 제공되지 않거나 실패하면 수동 CSV로 대체."
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=NAPM"
     }
   ],
   "settings": {
     "request_timeout_seconds": 30,
     "max_retries": 4,
     "retry_sleep_seconds": 3,
-    "history_months": 84,
-    "score_rules": {
-      "loan_yoy_positive": 1,
-      "loan_yoy_above_gdp_yoy": 1,
-      "pmi_above_50": 1,
-      "pmi_3m_change_positive": 1,
-      "gdp_yoy_positive": 1
-    }
+    "history_months": 84
   }
 }
