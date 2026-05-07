@@ -13,13 +13,11 @@ from typing import Optional, Dict
 import pandas as pd
 import requests
 
-
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "output"
 CACHE = ROOT / ".cache"
 OUTPUT.mkdir(exist_ok=True)
 CACHE.mkdir(exist_ok=True)
-
 LOG_PATH = OUTPUT / "run_log.txt"
 
 
@@ -76,33 +74,22 @@ def get_series_csv(series: dict, settings: dict):
     sid = series["id"]
     url = series["url"]
     cache_path = CACHE / f"{sid}.csv"
-
     status = {
-        "Series": sid,
-        "Status": "",
-        "SourceUsed": "",
-        "Message": "",
-        "Url": url,
-        "Timestamp": datetime.now().isoformat(timespec="seconds"),
+        "Series": sid, "Status": "", "SourceUsed": "", "Message": "",
+        "Url": url, "Timestamp": datetime.now().isoformat(timespec="seconds")
     }
-
     ok, msg = download_series(
-        sid,
-        url,
-        cache_path,
+        sid, url, cache_path,
         int(settings.get("request_timeout_seconds", 30)),
         int(settings.get("max_retries", 4)),
         int(settings.get("retry_sleep_seconds", 3)),
     )
-
     if ok:
         status.update(Status="OK", SourceUsed="online_requests", Message=msg)
         return cache_path, status
-
     if valid_csv(cache_path, sid):
         status.update(Status="STALE_OK", SourceUsed="cache", Message=f"Online failed; using existing cache: {msg}")
         return cache_path, status
-
     status.update(Status="FAILED", SourceUsed="none", Message=f"Online failed and no cache exists: {msg}")
     return None, status
 
@@ -110,40 +97,28 @@ def get_series_csv(series: dict, settings: dict):
 def read_series(path: Optional[Path], sid: str) -> pd.DataFrame:
     if path is None or not path.exists():
         return pd.DataFrame(columns=["date", sid])
-
-    df = pd.read_csv(path, comment="#")
-    date_col = None
-    for c in ["DATE", "date", "observation_date"]:
-        if c in df.columns:
-            date_col = c
-            break
-
-    val_col = sid if sid in df.columns else None
-    if val_col is None:
-        for c in ["VALUE", "value"]:
-            if c in df.columns:
-                val_col = c
-                break
-
+    try:
+        df = pd.read_csv(path, comment="#")
+    except Exception as e:
+        log(f"{sid}: CSV read failed: {e}")
+        return pd.DataFrame(columns=["date", sid])
+    date_col = next((c for c in ["DATE", "date", "observation_date"] if c in df.columns), None)
+    val_col = sid if sid in df.columns else next((c for c in ["VALUE", "value"] if c in df.columns), None)
     if date_col is None or val_col is None:
         log(f"{sid}: could not find date/value columns")
         return pd.DataFrame(columns=["date", sid])
-
     out = df[[date_col, val_col]].copy()
     out.columns = ["date", sid]
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
     out[sid] = pd.to_numeric(out[sid], errors="coerce")
-    out = out.dropna(subset=["date", sid]).sort_values("date")
-    return out
+    return out.dropna(subset=["date", sid]).sort_values("date")
 
 
 def latest_at_or_before(df: pd.DataFrame, sid: str, date: pd.Timestamp):
     if df.empty:
         return None
     sub = df[df["date"] <= date]
-    if sub.empty:
-        return None
-    return sub.iloc[-1]
+    return None if sub.empty else sub.iloc[-1]
 
 
 def yoy(df: pd.DataFrame, sid: str, obs) -> Optional[float]:
@@ -187,7 +162,7 @@ def n(x):
     return round(float(x), 2)
 
 
-def determine_phase(score: int, pmi, pmi_chg) -> str:
+def determine_phase(score: int, activity_yoy, activity_chg) -> str:
     if score <= 1:
         return "Pessimism"
     if score == 2:
@@ -195,7 +170,7 @@ def determine_phase(score: int, pmi, pmi_chg) -> str:
     if score == 3:
         return "Skepticism"
     if score >= 4:
-        if pmi is not None and pmi >= 52 and pmi_chg is not None and pmi_chg < 0:
+        if activity_yoy is not None and activity_yoy > 2 and activity_chg is not None and activity_chg < 0:
             return "Late Optimism / Chasing Risk"
         return "Optimism"
     return "Unknown"
@@ -205,33 +180,31 @@ def build_tracker(data: Dict[str, pd.DataFrame], months: int) -> pd.DataFrame:
     start = pd.Timestamp.today().normalize().replace(day=1) - pd.DateOffset(months=months)
     month_starts = pd.date_range(start=start, periods=months + 1, freq="MS")
     rows = []
-
     for m in month_starts:
         month_end = m + pd.offsets.MonthEnd(0)
-
         loan_obs = latest_at_or_before(data["BUSLOANS"], "BUSLOANS", month_end)
         gdp_obs = latest_at_or_before(data["GDPC1"], "GDPC1", month_end)
-        pmi_obs = latest_at_or_before(data["NAPM"], "NAPM", month_end)
+        act_obs = latest_at_or_before(data["IPMAN"], "IPMAN", month_end)
 
         loan_yoy = yoy(data["BUSLOANS"], "BUSLOANS", loan_obs)
         gdp_yoy = yoy(data["GDPC1"], "GDPC1", gdp_obs)
         gdp_qoq = qoq_annualized(data["GDPC1"], "GDPC1", gdp_obs)
-        pmi_chg = change_3m(data["NAPM"], "NAPM", pmi_obs)
+        activity_yoy = yoy(data["IPMAN"], "IPMAN", act_obs)
+        activity_chg_3m = change_3m(data["IPMAN"], "IPMAN", act_obs)
 
         score = 0
         if loan_yoy is not None and loan_yoy > 0:
             score += 1
         if loan_yoy is not None and gdp_yoy is not None and loan_yoy > gdp_yoy:
             score += 1
-        if pmi_obs is not None and float(pmi_obs["NAPM"]) >= 50:
+        if activity_yoy is not None and activity_yoy > 0:
             score += 1
-        if pmi_chg is not None and pmi_chg > 0:
+        if activity_chg_3m is not None and activity_chg_3m > 0:
             score += 1
         if gdp_yoy is not None and gdp_yoy > 0:
             score += 1
 
-        pmi_value = None if pmi_obs is None else float(pmi_obs["NAPM"])
-        phase = determine_phase(score, pmi_value, pmi_chg)
+        phase = determine_phase(score, activity_yoy, activity_chg_3m)
 
         rows.append({
             "Month": m.strftime("%Y-%m"),
@@ -242,13 +215,14 @@ def build_tracker(data: Dict[str, pd.DataFrame], months: int) -> pd.DataFrame:
             "GDP_Value": None if gdp_obs is None else n(gdp_obs["GDPC1"]),
             "GDP_YoY": n(gdp_yoy),
             "GDP_QoQ_Annualized": n(gdp_qoq),
-            "PMI_Obs_Date": "" if pmi_obs is None else pmi_obs["date"].strftime("%Y-%m-%d"),
-            "PMI_Value": None if pmi_obs is None else n(pmi_obs["NAPM"]),
-            "PMI_3M_Change": n(pmi_chg),
+            "Activity_Obs_Date": "" if act_obs is None else act_obs["date"].strftime("%Y-%m-%d"),
+            "Activity_Proxy": "IPMAN",
+            "Activity_Value": None if act_obs is None else n(act_obs["IPMAN"]),
+            "Activity_YoY": n(activity_yoy),
+            "Activity_3M_Change": n(activity_chg_3m),
             "Score": score,
             "Sentiment_Phase": phase,
         })
-
     return pd.DataFrame(rows)
 
 
@@ -268,6 +242,8 @@ table {{ border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 13
 th, td {{ border: 1px solid #ddd; padding: 7px; text-align: left; }}
 th {{ background: #f2f2f2; }}
 .note {{ color: #555; font-size: 13px; }}
+.good {{ color:#047857; font-weight:600; }}
+.bad {{ color:#B91C1C; font-weight:600; }}
 </style>
 </head>
 <body>
@@ -277,14 +253,17 @@ th {{ background: #f2f2f2; }}
 <h2>Latest signal</h2>
 <p><b>Phase:</b> {latest.get("Sentiment_Phase","")} / <b>Score:</b> {latest.get("Score","")}</p>
 <p><b>Loans YoY:</b> {latest.get("Loans_YoY","")} (obs {latest.get("Loans_Obs_Date","")}) |
-<b>PMI:</b> {latest.get("PMI_Value","")} (obs {latest.get("PMI_Obs_Date","")}) |
+<b>Activity:</b> {latest.get("Activity_Value","")} / YoY {latest.get("Activity_YoY","")} (obs {latest.get("Activity_Obs_Date","")}) |
 <b>GDP YoY:</b> {latest.get("GDP_YoY","")} (obs {latest.get("GDP_Obs_Date","")})</p>
+<p class="note">Activity proxy uses FRED IPMAN, not ISM/S&P PMI. IPMAN is hard manufacturing production data, not a diffusion PMI.</p>
 </div>
 <div class="card"><h2>Download status</h2>{status_html}</div>
 <div class="card"><h2>Recent tracker</h2>{recent_html}</div>
 </body>
 </html>"""
     (OUTPUT / "dashboard.html").write_text(html, encoding="utf-8")
+    # For GitHub Pages root URL
+    (OUTPUT / "index.html").write_text(html, encoding="utf-8")
 
 
 def write_excel(tracker: pd.DataFrame, summary: pd.DataFrame, status_df: pd.DataFrame) -> None:
@@ -331,20 +310,21 @@ def write_excel(tracker: pd.DataFrame, summary: pd.DataFrame, status_df: pd.Data
                 val = "" if cell.value is None else str(cell.value)
                 max_len = max(max_len, len(val))
             sheet.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 32)
+        sheet.freeze_panes = "A2"
 
     if ws.max_row > 5:
         chart = LineChart()
-        chart.title = "Loans YoY / PMI / GDP YoY"
+        chart.title = "Loans YoY / Activity YoY / GDP YoY"
         chart.y_axis.title = "Value"
         chart.x_axis.title = "Month"
-        for col in [4, 7, 10]:
+        for col in [4, 7, 12]:
             data = Reference(ws, min_col=col, min_row=1, max_row=ws.max_row)
             chart.add_data(data, titles_from_data=True)
         cats = Reference(ws, min_col=1, min_row=2, max_row=ws.max_row)
         chart.set_categories(cats)
         chart.height = 9
         chart.width = 20
-        ws.add_chart(chart, "O2")
+        ws.add_chart(chart, "Q2")
 
     out = ROOT / "macro_tracker.xlsx"
     wb.save(out)
@@ -375,10 +355,10 @@ def main() -> int:
 
     latest = tracker.iloc[-1] if not tracker.empty else {}
     summary = pd.DataFrame([
-        {"Metric": "Sentiment Phase", "Value": latest.get("Sentiment_Phase", ""), "Note": "Rule-based phase from credit/GDP/PMI"},
+        {"Metric": "Sentiment Phase", "Value": latest.get("Sentiment_Phase", ""), "Note": "Rule-based phase from credit/GDP/activity proxy"},
         {"Metric": "Score", "Value": latest.get("Score", ""), "Note": "0 to 5"},
         {"Metric": "Loans YoY", "Value": latest.get("Loans_YoY", ""), "Note": f"Observed: {latest.get('Loans_Obs_Date', '')}"},
-        {"Metric": "PMI", "Value": latest.get("PMI_Value", ""), "Note": f"Observed: {latest.get('PMI_Obs_Date', '')}"},
+        {"Metric": "Activity Proxy", "Value": "IPMAN", "Note": f"Value: {latest.get('Activity_Value', '')}; YoY: {latest.get('Activity_YoY', '')}; Observed: {latest.get('Activity_Obs_Date', '')}"},
         {"Metric": "GDP YoY", "Value": latest.get("GDP_YoY", ""), "Note": f"Observed: {latest.get('GDP_Obs_Date', '')}"},
     ])
     summary.to_csv(OUTPUT / "summary.csv", index=False, encoding="utf-8-sig")
@@ -386,7 +366,21 @@ def main() -> int:
     write_dashboard(tracker, status_df)
     write_excel(tracker, summary, status_df)
 
-    log("Done. Check output/dashboard.html, output/tracker.csv, and macro_tracker.xlsx if created.")
+    manifest = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "outputs": [
+            "index.html",
+            "dashboard.html",
+            "tracker.csv",
+            "summary.csv",
+            "download_status.csv",
+            "run_log.txt"
+        ],
+        "note": "output/index.html is the same dashboard for GitHub Pages root deployment."
+    }
+    (OUTPUT / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    log("Done. Pages site root will use output/index.html if deployed with GitHub Pages Actions.")
     return 0
 
 

@@ -2,15 +2,18 @@
   "series": [
     {
       "id": "BUSLOANS",
+      "label": "Loans",
       "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BUSLOANS"
     },
     {
       "id": "GDPC1",
+      "label": "GDP",
       "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDPC1"
     },
     {
-      "id": "NAPM",
-      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=NAPM"
+      "id": "IPMAN",
+      "label": "Manufacturing Activity Proxy",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=IPMAN"
     }
   ],
   "settings": {
